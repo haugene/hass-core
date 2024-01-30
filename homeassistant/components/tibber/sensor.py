@@ -9,6 +9,7 @@ from random import randrange
 from typing import Any, cast
 
 import aiohttp
+from dateutil.parser import parse
 import tibber
 
 from homeassistant.components.recorder import get_instance
@@ -353,6 +354,7 @@ class TibberSensorElPrice(TibberSensor):
             "off_peak_1": None,
             "peak": None,
             "off_peak_2": None,
+            "intraday_price_ranking": None,
         }
         self._attr_icon = ICON
         self._attr_name = f"Electricity price {self._home_name}"
@@ -383,9 +385,39 @@ class TibberSensorElPrice(TibberSensor):
             return
 
         res = self._tibber_home.current_price_data()
-        self._attr_native_value, price_level, self._last_updated = res
+        self._attr_native_value, price_level, price_time = res
+        self._last_updated = price_time
         self._attr_extra_state_attributes["price_level"] = price_level
 
+        # Calculate the current hour price ranking within todays 24 hours
+        if price_time is not None:
+            price_items_typed = [
+                (
+                    parse(item[0]).astimezone(price_time.tzinfo),
+                    item[1],
+                )
+                for item in self._tibber_home.price_total.items()
+            ]
+            price_items_filtered_sorted = sorted(
+                [
+                    item
+                    for item in price_items_typed
+                    if item[0].date() == price_time.date()
+                ],
+                key=lambda x: x[1],
+            )
+            try:
+                price_rank = next(
+                    idx
+                    for idx, item in enumerate(price_items_filtered_sorted, start=1)
+                    if item[0] == price_time
+                )
+            except StopIteration:
+                price_rank = None
+        else:
+            price_rank = None
+
+        self._attr_extra_state_attributes["intraday_price_ranking"] = price_rank
         attrs = self._tibber_home.current_attributes()
         self._attr_extra_state_attributes.update(attrs)
         self._attr_available = self._attr_native_value is not None
